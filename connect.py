@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from bleak import BleakClient, BleakScanner
+import os
 
 from common import *
 
@@ -16,6 +17,7 @@ class SerialClient(object):
         self.port = ''
         self.ser = None
         self.connected = False
+        self.baud = 115200
 
     def __unique_ports(self, ports):
         port_list = []
@@ -44,17 +46,70 @@ class SerialClient(object):
         self.port = answers['port']
         return self.port
 
-    def connect(self, port="", baud_rate=115200):
+    def connect(self, port):
         try:
-            port = port if port else self.port
-            self.ser = serial.Serial(port, baud_rate, timeout=1)
-            logger.info(f"Connected to {port} at {baud_rate} baud rate.")
+            # 如果之前连接过，先断开
+            if self.ser and self.ser.is_open:
+                self.disconnect()
+            
+            # 等待一小段时间确保端口完全释放
+            time.sleep(0.5)
+            
+            # 尝试打开串口
+            self.ser = serial.Serial(port, self.baud, timeout=1)
+            self.port = port
             self.connected = True
+            
+            # 创建独立线程读取数据
+            self.thread = threading.Thread(target=self.read, args=(self.ser,), daemon=True)
+            self.thread.start()
+            
+            logger.info(f"Connected to {port}.")
             return True
         except Exception as e:
-            error(e, f"Connect to {port} Failed")
-            self.connected = False
-            return False
+            # 尝试使用更高权限打开端口
+            try:
+                # 如果是Windows系统，尝试以独占模式打开
+                if os.name == 'nt':
+                    import win32file
+                    import win32con
+                    import pywintypes
+                    
+                    # 关闭先前打开的句柄
+                    if hasattr(self, 'handle') and self.handle:
+                        win32file.CloseHandle(self.handle)
+                    
+                    # 尝试以独占方式打开串口
+                    self.handle = win32file.CreateFile(
+                        f"\\\\.\\{port}",
+                        win32con.GENERIC_READ | win32con.GENERIC_WRITE,
+                        0,  # 不共享
+                        None,  # 默认安全属性
+                        win32con.OPEN_EXISTING,
+                        0,  # 没有重叠I/O
+                        None  # 模板文件为None
+                    )
+                    
+                    # 如果成功打开，创建Serial对象
+                    self.ser = serial.Serial()
+                    self.ser.port = port
+                    self.ser.baudrate = self.baud
+                    self.ser.timeout = 1
+                    self.ser.open()
+                    self.port = port
+                    self.connected = True
+                    
+                    # 创建独立线程读取数据
+                    self.thread = threading.Thread(target=self.read, args=(self.ser,), daemon=True)
+                    self.thread.start()
+                    
+                    logger.info(f"Connected to {port} using exclusive mode.")
+                    return True
+                else:
+                    raise e  # 非Windows系统，重新抛出异常
+            except Exception as e2:
+                error(e, f"Connect to {port} Failed")
+                return False
 
     def disconnect(self):
         if self.ser and self.ser.is_open:
@@ -80,21 +135,24 @@ class SerialClient(object):
             encode_msg = msg.encode('utf-8')
             self.ser.write(encode_msg)
             logger.debug(f"Sent: {msg}")
+            # 发送后添加换行符，确保命令能被设备正确接收
+            if not msg.endswith('\n'):
+                self.ser.write(b'\n')
+            
+            # 简化回应检测逻辑，不要期望完全相同的回应
             start_time = time.time()
-            received_msg = ""
-            while True:
+            while time.time() - start_time < 2:  # 等待2秒
                 if self.ser.in_waiting > 0:
-                    received_msg += self.ser.read(self.ser.in_waiting).decode('utf-8')
-
-                if time.time() - start_time > 10: return
-
-                if received_msg and (msg in received_msg):
-                    logger.debug(f"Received: {received_msg}")
-                    return received_msg
-
+                    response = self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
+                    logger.debug(f"Received: {response}")
+                    return response
                 time.sleep(0.1)
+            
+            return None  # 超时返回
         except Exception as e:
             error(e, "Serial port send message Failed!")
+            self.connected = False
+            return None
 
 
 class BaseBluetoothClient(object):

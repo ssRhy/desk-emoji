@@ -6,6 +6,10 @@ from PIL import Image
 import tkinter as tk
 import customtkinter as ctk
 import webbrowser
+import json
+import requests
+import time
+import serial
 
 from common import *
 from connect import *
@@ -197,31 +201,67 @@ class App(ctk.CTk):
         self.usb_flag_label = ctk.CTkLabel(self.connect_tabview.tab("USB"), text="")
         self.usb_flag_label.grid(row=2, column=0, padx=20, pady=10)
 
+        # 在connect_frame中添加强制释放按钮
+        self.force_release_button = ctk.CTkButton(self.connect_tabview.tab("USB"), text="强制释放", command=self.force_release_port)
+        self.force_release_button.grid(row=3, column=1, padx=20, pady=10)
+
         # create api frame
         self.api_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.api_frame.grid_columnconfigure(0, weight=1)
 
         self.api_tabview = ctk.CTkTabview(self.api_frame)
         self.api_tabview.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        self.api_tabview.add("OpenAI")
-        self.api_tabview.tab("OpenAI").grid_columnconfigure(0, weight=1)
-        self.api_tabview.tab("OpenAI").grid_columnconfigure(1, weight=6)
+        self.api_tabview.add("Silicon Flow")
+        self.api_tabview.tab("Silicon Flow").grid_columnconfigure(0, weight=1)
+        self.api_tabview.tab("Silicon Flow").grid_columnconfigure(1, weight=6)
 
-        self.api_url_label = ctk.CTkLabel(self.api_tabview.tab("OpenAI"), text="API URL: ")
-        self.api_url_label.grid(row=0, column=0, padx=20, pady=20, sticky="w")
-        self.api_url_entry = ctk.CTkEntry(self.api_tabview.tab("OpenAI"))
-        self.api_url_entry.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
-
-        self.api_key_label = ctk.CTkLabel(self.api_tabview.tab("OpenAI"), text="API Key: ")
-        self.api_key_label.grid(row=1, column=0, padx=20, pady=20, sticky="w")
-        self.api_key_entry = ctk.CTkEntry(self.api_tabview.tab("OpenAI"))
-        self.api_key_entry.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
-
-        self.save_flag_label = ctk.CTkLabel(self.api_tabview.tab("OpenAI"), text="")
-        self.save_flag_label.grid(row=2, column=0, padx=20, pady=20)
-
-        self.api_save_button = ctk.CTkButton(self.api_tabview.tab("OpenAI"), text="连接", command=self.api_save_button_event)
-        self.api_save_button.grid(row=2, column=1, padx=20, pady=10)
+        self.sf_url_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="API URL: ")
+        self.sf_url_label.grid(row=0, column=0, padx=20, pady=20, sticky="w")
+        self.sf_url_entry = ctk.CTkEntry(self.api_tabview.tab("Silicon Flow"))
+        self.sf_url_entry.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.sf_url_entry.insert(0, "https://api.siliconflow.cn/v1/chat/completions")
+        
+        self.sf_key_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="API Key: ")
+        self.sf_key_label.grid(row=1, column=0, padx=20, pady=20, sticky="w")
+        self.sf_key_entry = ctk.CTkEntry(self.api_tabview.tab("Silicon Flow"))
+        self.sf_key_entry.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+        
+        self.sf_model_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="模型: ")
+        self.sf_model_label.grid(row=2, column=0, padx=20, pady=20, sticky="w")
+        self.sf_model_combobox = ctk.CTkComboBox(self.api_tabview.tab("Silicon Flow"), 
+            values=["Qwen/QwQ-32B", "Qwen/Qwen1.5-72B-Chat", "Qwen/Qwen1.5-32B-Chat",
+                    "Qwen/Qwen2.5-7B-Instruct", "01-ai/Yi-1.5-34B-Chat-16K"])
+        self.sf_model_combobox.grid(row=2, column=1, padx=20, pady=20, sticky="nsew")
+        self.sf_model_combobox.set("Qwen/QwQ-32B")
+        
+        self.sf_save_flag_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="")
+        self.sf_save_flag_label.grid(row=3, column=0, padx=20, pady=20)
+        
+        self.sf_test_button = ctk.CTkButton(self.api_tabview.tab("Silicon Flow"), text="测试连接", 
+                                           command=self.sf_test_button_event)
+        self.sf_test_button.grid(row=3, column=1, padx=20, pady=10)
+        
+        self.sf_save_button = ctk.CTkButton(self.api_tabview.tab("Silicon Flow"), text="保存配置", 
+                                           command=self.sf_save_button_event)
+        self.sf_save_button.grid(row=4, column=1, padx=20, pady=10)
+        
+        # 切换到硅基流动选项卡
+        self.api_tabview.set("Silicon Flow")
+        
+        # 禁用语音相关控件
+        self.speaker_switch.deselect()
+        self.voice_combobox.configure(state="disabled")
+        self.speech_button.configure(state="disabled")
+        
+        # 设置为已禁用状态的提示
+        self.speaker_switch.configure(text="扬声器 (不可用)")
+        
+        # 尝试自动加载保存的API设置
+        url, key = llm.read_json()
+        if key:  # 如果有保存的API Key
+            logger.info("Found saved API configuration, attempting to connect...")
+            if llm.connect(url, key):
+                self.print_textbox("自动连接到硅基流动API成功")
 
         # create firmware frame
         self.firmware_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -254,12 +294,12 @@ class App(ctk.CTk):
 {title} 桌面陪伴机器人
 
 初次配置：
-1. 连接机器人 -> 点击“串口” -> 选择 蓝牙 或 USB -> “连接”
-2. 点击“API” -> 配置 URL 网址和 Key（支持中转）-> ”连接“
+1. 连接机器人 -> 点击"串口" -> 选择 蓝牙 或 USB -> "连接"
+2. 点击"API" -> 配置 URL 网址和 Key（支持中转）-> "连接"
 
 使用说明：
-“对话”界面用于对话互动，可以发文字也可以语音，可以开关扬声器、更改声音
-“动作”界面用于测试表情和动作，点击不同按钮触发不同表情和动作
+"对话"界面用于对话互动，可以发文字也可以语音，可以开关扬声器、更改声音
+"动作"界面用于测试表情和动作，点击不同按钮触发不同表情和动作
 
 
 杭州易问科技版权所有 2024.11
@@ -397,25 +437,172 @@ class App(ctk.CTk):
     def usb_connect_button_event(self):
         port = self.usb_combobox.get()
         if not port: return
-        if blt.connected: blt.disconnect()
-        if ser.connect(port):
-            self.usb_connected = True
-            self.usb_flag_label.configure(text="连接成功", text_color="green")
-        else:
-            self.usb_connected = False
-            self.usb_flag_label.configure(text="连接失败", text_color="red")
+        
+        # 如果蓝牙已连接，先断开
+        if blt.connected: 
+            blt.disconnect()
+        
+        # 尝试连接前先检查是否已有程序占用该串口
+        try:
+            # 尝试打开并立即关闭以测试端口是否可用
+            test_ser = serial.Serial(port, 115200, timeout=0.1)
+            test_ser.close()
+            time.sleep(0.5)  # 给予系统时间释放端口
+        except Exception as e:
+            logger.warning(f"Port test failed: {e}")
+            # 不退出，继续尝试连接
+        
+        # 如果有之前的连接，确保断开
+        if ser.connected and ser.port == port:
+            ser.disconnect()
+            time.sleep(0.5)  # 等待端口释放
+        
+        # 多次尝试连接
+        for attempt in range(3):
+            if ser.connect(port):
+                self.usb_connected = True
+                self.usb_flag_label.configure(text="连接成功", text_color="green")
+                return
+            time.sleep(1)  # 等待一秒后重试
+        
+        # 所有尝试都失败
+        self.usb_connected = False
+        self.usb_flag_label.configure(text="连接失败", text_color="red")
+        
+        # 提示用户可能的解决方案
+        error_msg = f"无法连接到{port}，可能原因:\n1. 端口被其他程序占用\n2. 设备未正确连接\n3. 需要管理员权限运行程序"
+        self.print_textbox(error_msg)
 
     def api_button_event(self):
         self.select_frame_by_name("api")
         self.save_flag_label.configure(text="", fg_color="transparent")
-        self.load_api_key()
+        
+        # 添加硅基流动API设置
+        self.api_tabview.add("Silicon Flow")
+        self.api_tabview.tab("Silicon Flow").grid_columnconfigure(0, weight=1)
+        self.api_tabview.tab("Silicon Flow").grid_columnconfigure(1, weight=6)
+        
+        # Silicon Flow API设置界面
+        self.sf_url_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="API URL: ")
+        self.sf_url_label.grid(row=0, column=0, padx=20, pady=20, sticky="w")
+        self.sf_url_entry = ctk.CTkEntry(self.api_tabview.tab("Silicon Flow"))
+        self.sf_url_entry.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+        self.sf_url_entry.insert(0, "https://api.siliconflow.cn/v1/chat/completions")
+        
+        self.sf_key_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="API Key: ")
+        self.sf_key_label.grid(row=1, column=0, padx=20, pady=20, sticky="w")
+        self.sf_key_entry = ctk.CTkEntry(self.api_tabview.tab("Silicon Flow"))
+        self.sf_key_entry.grid(row=1, column=1, padx=20, pady=20, sticky="nsew")
+        
+        self.sf_model_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="模型: ")
+        self.sf_model_label.grid(row=2, column=0, padx=20, pady=20, sticky="w")
+        self.sf_model_combobox = ctk.CTkComboBox(self.api_tabview.tab("Silicon Flow"), 
+            values=["Qwen/QwQ-32B", "Qwen/Qwen1.5-72B-Chat", "Qwen/Qwen1.5-32B-Chat",
+                    "Qwen/Qwen2.5-7B-Instruct", "01-ai/Yi-1.5-34B-Chat-16K"])
+        self.sf_model_combobox.grid(row=2, column=1, padx=20, pady=20, sticky="nsew")
+        self.sf_model_combobox.set("Qwen/QwQ-32B")
+        
+        self.sf_save_flag_label = ctk.CTkLabel(self.api_tabview.tab("Silicon Flow"), text="")
+        self.sf_save_flag_label.grid(row=3, column=0, padx=20, pady=20)
+        
+        self.sf_test_button = ctk.CTkButton(self.api_tabview.tab("Silicon Flow"), text="测试连接", 
+                                           command=self.sf_test_button_event)
+        self.sf_test_button.grid(row=3, column=1, padx=20, pady=10)
+        
+        self.sf_save_button = ctk.CTkButton(self.api_tabview.tab("Silicon Flow"), text="保存配置", 
+                                           command=self.sf_save_button_event)
+        self.sf_save_button.grid(row=4, column=1, padx=20, pady=10)
+        
+        # 切换到硅基流动选项卡
+        self.api_tabview.set("Silicon Flow")
+        
+        # 加载已保存的配置
+        url, key = llm.read_json()
+        if url and "siliconflow" in url:
+            self.sf_url_entry.delete(0, tk.END)
+            self.sf_url_entry.insert(0, url)
+            self.sf_key_entry.delete(0, tk.END)
+            self.sf_key_entry.insert(0, key)
+            if hasattr(llm, 'model') and llm.model:
+                self.sf_model_combobox.set(llm.model)
 
-    def api_save_button_event(self):
-        self.save_api_key()
+    def sf_test_button_event(self):
+        url = self.sf_url_entry.get().strip()
+        key = self.sf_key_entry.get()
+        model = self.sf_model_combobox.get()
+        
+        if not url or not key or not model:
+            self.sf_save_flag_label.configure(text="请填写完整的API信息", text_color="red")
+            return
+        
+        # 直接测试API
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "test"}],
+            "max_tokens": 5,
+            "temperature": 0.7,
+            "top_p": 0.7,
+            "stream": False
+        }
+        
+        try:
+            self.sf_save_flag_label.configure(text="正在测试...", text_color="black")
+            self.update()
+            
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    self.sf_save_flag_label.configure(text="API测试成功", text_color="green")
+                    logger.info(f"API test successful with model {model}")
+                else:
+                    self.sf_save_flag_label.configure(text=f"API返回格式异常", text_color="red")
+                    logger.warning(f"Unexpected API response format: {result}")
+            else:
+                self.sf_save_flag_label.configure(text=f"错误：{response.status_code}", text_color="red")
+                logger.error(f"API test failed: {response.status_code} - {response.text}")
+        except Exception as e:
+            self.sf_save_flag_label.configure(text=f"测试失败：{str(e)[:50]}", text_color="red")
+            logger.error(f"API test failed: {e}")
+
+    def sf_save_button_event(self):
+        url = self.sf_url_entry.get().strip()
+        key = self.sf_key_entry.get()
+        model = self.sf_model_combobox.get()
+        
+        if not url or not key or not model:
+            self.sf_save_flag_label.configure(text="请填写完整的API信息", text_color="red")
+            return
+        
+        # 保存API设置
+        llm.write_json(url, key, model=model, provider="siliconflow")
+        
+        # 尝试连接
         if llm.connect():
-            self.save_flag_label.configure(text="连接成功", text_color="green")
+            self.sf_save_flag_label.configure(text="连接成功", text_color="green")
+            
+            # 禁用语音相关控件
+            self.speaker_switch.deselect()
+            self.voice_combobox.configure(state="disabled")
+            self.speech_button.configure(state="disabled")
+            
+            # 显示成功信息
+            self.print_textbox("已成功保存并连接到硅基流动API\n")
+            
+            # 切换到聊天界面以便立即使用
+            self.select_frame_by_name("chat")
         else:
-            self.save_flag_label.configure(text="连接失败", text_color="red")
+            self.sf_save_flag_label.configure(text="连接失败", text_color="red")
 
     def firmware_button_event(self):
         self.select_frame_by_name("firmware")
@@ -432,11 +619,16 @@ class App(ctk.CTk):
     def __chat_LLM(self, question):
         self.print_textbox(f"You:\t{question}")
         response = self.chat(question)
-        answer = json.loads(response)["answer"]
+        
+        try:
+            parsed = json.loads(response)
+            answer = parsed.get("answer", response)
+        except json.JSONDecodeError:
+            answer = response
+        
         self.print_textbox(f"Bot:\t{answer}\n")
-        if bool(self.speaker_switch.get()):
-            voice = self.voice_combobox.get()
-            speaker.say(text=answer, voice=voice)
+        
+        # 发送响应给机器人
         threading.Thread(target=self.send_response, args=(response,)).start()
 
     def chat_msg_event(self, event=None):
@@ -547,6 +739,27 @@ class App(ctk.CTk):
     def open_url(self):
             url = "https://gitee.com/ideamark/desk-emoji/releases"
             webbrowser.open(url)
+
+    def force_release_port(self):
+        """强制释放选定的串口"""
+        port = self.usb_combobox.get()
+        if not port: return
+        
+        try:
+            # 在Windows系统上，使用命令行工具关闭占用的端口
+            if os.name == 'nt':
+                # 提取COM端口号
+                port_num = port.replace("COM", "")
+                
+                # 使用PowerShell命令查找并结束占用端口的进程
+                ps_command = f'Get-CimInstance -ClassName Win32_SerialPort | Where-Object {{ $_.DeviceID -eq "{port}" }} | Get-CimAssociatedInstance -ResultClassName Win32_Process | ForEach-Object {{ $_.Terminate() }}'
+                
+                self.print_textbox(f"正在尝试释放{port}...")
+                subprocess.run(["powershell", "-Command", ps_command], shell=True)
+                
+                self.print_textbox(f"已尝试释放{port}，请重新连接")
+        except Exception as e:
+            self.print_textbox(f"释放端口失败: {str(e)}")
 
 
 if __name__ == "__main__":
